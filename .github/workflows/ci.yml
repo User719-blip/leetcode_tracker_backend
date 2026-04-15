@@ -8,6 +8,8 @@ on:
 jobs:
   backend-tests:
     runs-on: ubuntu-latest
+    env:
+      BACKEND_DIR: .
 
     steps:
       - name: Checkout
@@ -18,15 +20,31 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            leetcode_tracker_web_api/requirements.txt
+
+      - name: Detect backend directory
+        shell: bash
+        run: |
+          if [ -f "requirements.txt" ] && [ -d "app" ] && [ -d "tests" ]; then
+            echo "BACKEND_DIR=." >> "$GITHUB_ENV"
+          elif [ -f "leetcode_tracker_web_api/requirements.txt" ] && [ -d "leetcode_tracker_web_api/app" ] && [ -d "leetcode_tracker_web_api/tests" ]; then
+            echo "BACKEND_DIR=leetcode_tracker_web_api" >> "$GITHUB_ENV"
+          else
+            echo "Could not detect backend directory with requirements.txt, app/, and tests/"
+            exit 1
+          fi
 
       - name: Install backend dependencies
         shell: bash
         run: |
+          cd "$BACKEND_DIR"
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run backend tests
         shell: bash
         run: |
-          pytest -q
+          cd "$BACKEND_DIR"
+          PYTHONPATH="$PWD:$PYTHONPATH" pytest -q
