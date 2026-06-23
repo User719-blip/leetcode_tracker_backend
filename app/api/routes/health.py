@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin
 from app.core.config import get_settings
-from app.core.monitoring import build_monitor_report
+from app.core.monitoring import build_monitor_report, parse_monitor_http_check_specs, _check_http_url
 from app.core.rate_limiter import rate_limiter
 from app.core.refresh_token_maintenance import active_refresh_family_count
 from app.db.session import get_db
@@ -46,16 +46,19 @@ def monitor_status(
     _: str = Depends(get_current_admin),
 ) -> dict[str, object]:
     report = build_monitor_report()
-    extra_url_list = [url.strip() for url in (extra_urls or "").split(",") if url.strip()]
-    if extra_url_list:
-        from app.core.monitoring import _check_http_url
-
+    extra_check_specs = parse_monitor_http_check_specs(extra_urls or "")
+    if extra_check_specs:
         extra_checks = [
-            _check_http_url(name=f"extra_{index}", url=url, timeout_seconds=settings.monitor_http_timeout_seconds)
-            for index, url in enumerate(extra_url_list, start=1)
+            _check_http_url(
+                name=f"extra_{index}",
+                url=spec.url,
+                method=spec.method,
+                timeout_seconds=settings.monitor_http_timeout_seconds,
+            )
+            for index, spec in enumerate(extra_check_specs, start=1)
         ]
         report["checks"].extend([asdict(check) for check in extra_checks])
-        report["requested_external_checks_count"] = len(extra_url_list)
+        report["requested_external_checks_count"] = len(extra_check_specs)
         report["status"] = "ok" if all(check.ok for check in extra_checks) and report["overall_ok"] else "degraded"
         report["overall_ok"] = report["status"] == "ok"
     else:

@@ -106,6 +106,14 @@ It checks:
 
 Use `MONITOR_CHECK_URLS` for any dependency that should be watched from inside this API process, such as a Supabase edge function health endpoint or a cron-triggered URL.
 
+Check syntax:
+
+- `GET https://example.com/health` uses a GET request.
+- `POST https://example.com/functions/v1/daily-update` uses POST.
+- If no method prefix is provided, GET is used by default.
+
+This is useful for Supabase Edge Functions that return `405 Method Not Allowed` on GET but accept POST.
+
 Security events are emitted as structured JSON logs for:
 
 - Refresh success and failure.

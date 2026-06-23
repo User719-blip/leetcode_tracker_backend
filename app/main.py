@@ -12,6 +12,9 @@ from app.api.routes.leetcode import router as leetcode_router
 from app.core.config import get_settings
 from app.core.refresh_token_maintenance import cleanup_refresh_tokens, mark_cleanup_failure
 from app.db.session import SessionLocal
+from app.core.tracing import trace_id_middleware, TraceIdFilter
+from app.core.log_collector import InMemoryLogHandler
+import logging
 
 settings = get_settings()
 
@@ -61,6 +64,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+# Attach trace id middleware and logging integrations
+app.middleware("http")(trace_id_middleware)
+
+# add trace id filter and in-memory handler to root logger
+root_logger = logging.getLogger()
+root_logger.addFilter(TraceIdFilter())
+root_logger.addHandler(InMemoryLogHandler())
 
 app.add_middleware(
     CORSMiddleware,
