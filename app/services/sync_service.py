@@ -89,32 +89,43 @@ def get_latest_snapshots(db: Session) -> list[dict]:
 
 def get_weekly_comparison(db: Session) -> list[dict]:
     latest = get_latest_snapshots(db)
-    output: list[dict] = []
+   
+    user_ids = [row["user_id"] for row in latest]
+    latest_dates = {row["user_id"]: row["date"] for row in latest}
 
+    subquery = (
+        select(
+            Snapshot.user_id,   
+            Snapshot.date,
+            Snapshot.total,
+            func.row_number().over(
+                partition_by=Snapshot.user_id,
+                order_by=Snapshot.date.desc()
+            ).label("row_num")
+        )
+        .where(Snapshot.user_id.in_(user_ids)).subquery()
+    )
+
+    previous_rows = db.execute(
+        select(subquery.c.user_id, subquery.c.date, subquery.c.total)
+        .where(subquery.c.row_num == 2)
+    ).all()
+
+
+    previous_map = {row.user_id: row.total for row in previous_rows}
+
+    output = []
+                                                                                                                                                                                                                         
     for row in latest:
-        previous = (
-            db.execute(
-                select(Snapshot)
-                .where(Snapshot.user_id == row["user_id"], Snapshot.date < row["date"])
-                .order_by(Snapshot.date.desc())
-                .limit(1)
-            )
-            .scalars()
-            .first()
-        )
-
-        previous_total = previous.total if previous else None
+        previous_total = previous_map.get(row["user_id"])
         delta_total = row["total"] - (previous_total or 0)
-
-        output.append(
-            {
-                "user_id": row["user_id"],
-                "username": row["username"],
-                "date": row["date"],
-                "total": row["total"],
-                "previous_total": previous_total,
-                "delta_total": delta_total,
-            }
-        )
+        output.append({
+            "user_id": row["user_id"],
+            "username": row["username"],
+            "date": row["date"],
+            "total": row["total"],
+            "previous_total": previous_total,
+            "delta_total": delta_total,
+        })
 
     return output
