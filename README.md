@@ -1,138 +1,196 @@
 # LeetCode Tracker API
 
-FastAPI backend for the LeetCode tracker frontend.
+## Overview
 
-## Run locally
+LeetCode Tracker API is a FastAPI backend that powers the Flutter web frontend for leaderboard, analytics, admin operations, monitoring, and token-based session management. It stores user and snapshot data in PostgreSQL and exposes both public and admin-protected routes.
 
-1. Create a virtual environment and install dependencies from `requirements.txt`.
-2. Copy `.env.example` to `.env` and set `DATABASE_URL`, `ADMIN_EMAILS`, and `ADMIN_PASSWORD`.
-3. Run database migrations:
-   - `alembic upgrade head`
-4. Start the app:
-   - `uvicorn app.main:app --reload`
+- Backend repo path: `leetcode_tracker_web_api/`
+- Frontend repo path: `../leetcode_tracker_web/`
 
-## Frontend connection
+## HLD
 
-The Flutter frontend connects to this API by building requests against a compile-time `API_BASE_URL`.
+```mermaid
+flowchart LR
+    FE[Flutter Web Frontend] --> API[FastAPI App]
+    API --> ROUTES[Route Layer]
+    ROUTES --> AUTH[JWT Auth + RBAC]
+    ROUTES --> SVC[Sync / Leaderboard / Monitoring Services]
+    SVC --> DB[(PostgreSQL)]
+    SVC --> RL[Rate Limiter]
+    SVC --> LOGS[Security + Monitor Logs]
 
-### Local development
+    SUPA[Supabase Cron / Edge Functions] --> API
+    ADMIN[Admin User] --> FE
+```
 
-- Frontend: `flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8000`
-- Backend: `uvicorn app.main:app --reload`
-- Requests go to `http://localhost:8000/api/v1/...`
+## Features
 
-### Hosted deployment
-
-- If the frontend is hosted on GitHub Pages and the backend is hosted elsewhere, set the frontend `API_BASE_URL` secret to the public backend origin, such as `https://api.yourdomain.com`.
-- Update `ALLOWED_ORIGINS` in this backend to include the frontend origin, such as `https://user719-blip.github.io`.
-- If both are behind one domain, proxy `/api/v1` to the backend and set `API_BASE_URL` to that shared origin.
-
-The frontend does not need Supabase runtime variables anymore; it only needs the public API URL.
-
-## Auth token lifecycle
-
-This backend uses two JWTs:
-
-- Access token (short-lived): controlled by `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`.
-- Refresh token (long-lived): controlled by `JWT_REFRESH_TOKEN_EXPIRE_DAYS`.
-
-Flow:
-
-1. `POST /api/v1/auth/admin/login` returns access + refresh tokens.
-2. Client uses access token for protected routes.
-3. On access-token expiry, client calls `POST /api/v1/auth/refresh` with refresh token.
-4. Refresh token is rotated on every successful refresh.
-5. Old refresh token is revoked with audit metadata.
-
-Security behavior:
-
-- Refresh token hashes are stored in DB (`refresh_tokens`), not plaintext tokens.
-- Reuse of a revoked refresh token triggers family-wide revocation (`reuse_detected`).
-- `POST /api/v1/auth/logout` revokes one refresh token.
-- `POST /api/v1/auth/logout-all` revokes all refresh tokens for the admin.
-- Login is capped by `MAX_ACTIVE_REFRESH_TOKEN_FAMILIES_PER_ADMIN` so one admin cannot accumulate unlimited active sessions.
-- A cleanup job removes expired/revoked refresh rows after `REFRESH_TOKEN_CLEANUP_RETENTION_DAYS`.
-
-## Rate limiting
-
-Rate limiting is enabled on auth and admin endpoints.
-
-- If `REDIS_URL` is set and reachable, Redis-backed rate limiting is used.
-- If Redis is unavailable, limiter automatically falls back to in-memory mode.
-
-## CORS
-
-Set `ALLOWED_ORIGINS` to every frontend origin that should be allowed to call this API. For example:
-
-- Local dev: `http://localhost:3000,http://localhost:5173,http://localhost:8000`
-- GitHub Pages: `https://user719-blip.github.io`
-- Custom domain: `https://app.yourdomain.com`
-
-For local Flutter web runs on dynamic ports, keep `ALLOWED_ORIGIN_REGEX` enabled (default):
-
-- `ALLOWED_ORIGIN_REGEX=^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$`
-
-This prevents repeated preflight `OPTIONS ... 400` failures when the browser origin changes ports.
-
-Environment variables:
-
-- `REDIS_URL`: Redis connection URL (example: `redis://localhost:6379/0`).
-- `RATE_LIMIT_REDIS_PREFIX`: key namespace prefix used in Redis.
-- `MAX_ACTIVE_REFRESH_TOKEN_FAMILIES_PER_ADMIN`: maximum active refresh families allowed per admin email.
-- `REFRESH_TOKEN_CLEANUP_INTERVAL_MINUTES`: how often the cleanup job runs.
-- `REFRESH_TOKEN_CLEANUP_RETENTION_DAYS`: how long expired/revoked refresh rows are kept before deletion.
-- `MONITOR_CHECK_URLS`: comma-separated list of extra HTTP endpoints to probe.
-- `MONITOR_HTTP_TIMEOUT_SECONDS`: timeout for each monitor probe.
-
-Cleanup job behavior:
-
-- Runs once on app startup.
-- Then runs on the configured interval in the API process.
-- Deletes rows that are revoked or expired past the retention window.
+- Public leaderboard endpoints for latest, weekly, global, and user snapshot views
+- Aggregated analytics dashboard endpoint for the frontend analytics page
+- Admin login, refresh, logout, and logout-all flows
+- Refresh token rotation with reuse-detection and family revocation
+- Admin user management and manual sync operations
+- Health and monitor endpoints for operational visibility
+- Structured security event logging
 
 ## Monitoring
 
-`GET /api/v1/health/monitor` returns a combined monitor report.
-
-Access control:
-
-- Requires a valid admin access token (`Authorization: Bearer <access_token>`).
-
-It checks:
-
-- Refresh cleanup heartbeat and last run status.
-- Rate limiter backend mode.
-- Optional external URLs configured through `MONITOR_CHECK_URLS`.
-
-Use `MONITOR_CHECK_URLS` for any dependency that should be watched from inside this API process, such as a Supabase edge function health endpoint or a cron-triggered URL.
-
-Check syntax:
-
-- `GET https://example.com/health` uses a GET request.
-- `POST https://example.com/functions/v1/daily-update` uses POST.
-- If no method prefix is provided, GET is used by default.
-
-This is useful for Supabase Edge Functions that return `405 Method Not Allowed` on GET but accept POST.
-
-Security events are emitted as structured JSON logs for:
-
-- Refresh success and failure.
-- Refresh reuse detection.
-- Logout-all actions.
-
-## Main routes
+Monitoring support is available through:
 
 - `GET /api/v1/health`
-- `POST /api/v1/leetcode/fetch`
+- `GET /api/v1/health/deps`
+- `GET /api/v1/health/monitor`
+
+Monitor capabilities include:
+
+- refresh token cleanup status
+- recent in-memory logs
+- rate limiter backend visibility
+- configured external dependency probes
+- ad hoc extra probe URLs from the frontend monitor screen
+
+Configuration:
+
+- `MONITOR_CHECK_URLS`
+- `MONITOR_HTTP_TIMEOUT_SECONDS`
+
+Note:
+
+- monitor checks use direct HTTP probes from the API process
+- protected URLs need additional design if header-based probing is required
+
+## Rate Limiter
+
+Rate limiting is enabled around auth and admin-sensitive routes.
+
+- Redis-backed limiting is used when `REDIS_URL` is configured and reachable
+- the app falls back to in-memory limiting if Redis is unavailable
+- limiter backend mode is surfaced through monitoring
+
+Related settings:
+
+- `REDIS_URL`
+- `RATE_LIMIT_REDIS_PREFIX`
+
+## RBAC
+
+Role-based access is intentionally narrow.
+
+- public routes: leaderboard and health basics
+- admin-only routes: admin management, sync, and monitor report
+- admin access tokens must contain:
+  - `role=admin`
+  - `typ=access`
+  - an allowed email from `ADMIN_EMAILS`
+
+Refresh tokens are long-lived but are not accepted for route authorization directly.
+
+## Coverage
+
+Backend coverage in this repo includes:
+
+- auth and refresh lifecycle behavior
+- monitor endpoint tests
+- config validation tests
+- cleanup and monitoring support tests
+
+Useful test locations:
+
+- `tests/test_monitor_and_cleanup.py`
+- `tests/test_config_validation.py`
+- `tests/conftest.py`
+
+Run tests:
+
+```bash
+pytest -q
+```
+
+## Main Routes
+
 - `POST /api/v1/auth/admin/login`
 - `POST /api/v1/auth/refresh`
 - `POST /api/v1/auth/logout`
 - `POST /api/v1/auth/logout-all`
+- `GET /api/v1/health`
+- `GET /api/v1/health/deps`
+- `GET /api/v1/health/monitor`
+- `GET /api/v1/leaderboard/latest`
+- `GET /api/v1/leaderboard/weekly`
+- `GET /api/v1/leaderboard/global`
+- `GET /api/v1/leaderboard/dashboard`
+- `GET /api/v1/leaderboard/users/{user_id}/snapshots`
 - `GET /api/v1/admin/users`
 - `POST /api/v1/admin/users`
 - `DELETE /api/v1/admin/users/{user_id}`
 - `POST /api/v1/admin/sync/daily`
-- `GET /api/v1/leaderboard/latest`
-- `GET /api/v1/leaderboard/weekly`
-- `GET /api/v1/leaderboard/global`
-- `GET /api/v1/leaderboard/users/{user_id}/snapshots`
+
+## Deployment Instructions
+
+### Local
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+alembic upgrade head
+uvicorn app.main:app --reload
+```
+
+On Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+alembic upgrade head
+uvicorn app.main:app --reload
+```
+
+### Required Environment
+
+At minimum configure:
+
+- `DATABASE_URL`
+- `ADMIN_EMAILS`
+- `ADMIN_PASSWORD`
+- `JWT_SECRET_KEY`
+- `ALLOWED_ORIGINS`
+
+Operationally useful settings:
+
+- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`
+- `JWT_REFRESH_TOKEN_EXPIRE_DAYS`
+- `MAX_ACTIVE_REFRESH_TOKEN_FAMILIES_PER_ADMIN`
+- `REFRESH_TOKEN_CLEANUP_INTERVAL_MINUTES`
+- `REFRESH_TOKEN_CLEANUP_RETENTION_DAYS`
+- `MONITOR_CHECK_URLS`
+- `MONITOR_HTTP_TIMEOUT_SECONDS`
+- `REDIS_URL`
+
+### Hosted
+
+- deploy the API to your host of choice such as Render
+- set the frontend `API_BASE_URL` to this backend origin
+- allow the frontend origin in `ALLOWED_ORIGINS`
+- verify `/api/v1/health` before pointing production traffic at it
+
+### Keep-Warm Support
+
+If using Render free/sleeping infrastructure, this repo also works with a Supabase keep-warm flow documented in:
+
+- [../leetcode_tracker_web/supabase/functions/keep-render-warm/README.md](../leetcode_tracker_web/supabase/functions/keep-render-warm/README.md)
+
+## E2E Script
+
+The companion frontend repo includes a PowerShell smoke script:
+
+- [../leetcode_tracker_web/scripts/smoke_e2e.ps1](../leetcode_tracker_web/scripts/smoke_e2e.ps1)
+
+It is useful after deployment to verify:
+
+- health endpoint availability
+- admin login
+- refresh token rotation
+- monitor access
+- logout-all behavior
